@@ -1,12 +1,12 @@
 {
-    "name": "elementflow",
-    "short_name": "elementflow",
+    "name": "ElementFlow",
+    "short_name": "ElementFlow",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#0B0E14",
+    "theme_color": "#0B0E14",
+    "description": "From HTML to Flutter. Seamlessly. Convert HTML and CSS into Flutter widgets and a single Dart file.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {
