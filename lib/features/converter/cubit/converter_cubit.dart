@@ -4,9 +4,12 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
+import '../models/component_mapper.dart';
 import '../models/conversion_result.dart';
 import '../services/conversion_service.dart';
 import '../services/dart_code_generator.dart';
+import '../services/mapper_prompt.dart';
+import '../services/mapper_samples.dart';
 import '../services/samples.dart';
 import '../services/web_bridge.dart';
 import 'converter_state.dart';
@@ -107,6 +110,87 @@ class ConverterCubit extends Cubit<ConverterState> {
     );
   }
 
+  // ----------------------------------------------------- component mapper
+
+  /// Loads a mapper from JSON text. Invalid mappers are rejected with every
+  /// problem listed; the previous mapper stays active.
+  bool loadMapperText(String text, {String? label}) {
+    try {
+      final mapper = ComponentMapper.parse(text);
+      emit(state.copyWith(mapper: mapper, mapperErrors: const []));
+      _feedback(
+        'Mapper "${mapper.name}" loaded: ${mapper.components.length} '
+        'component${mapper.components.length == 1 ? '' : 's'}',
+      );
+      return true;
+    } on MapperException catch (e) {
+      emit(state.copyWith(mapperErrors: e.errors));
+      final more = e.errors.length > 1 ? ' (+${e.errors.length - 1} more)' : '';
+      _feedback(
+        '${label ?? 'Mapper'} was not loaded: ${e.errors.first}$more',
+        error: true,
+      );
+      return false;
+    }
+  }
+
+  void loadMapperFile(String name, Uint8List bytes) {
+    final String text;
+    try {
+      text = utf8.decode(bytes);
+    } on FormatException {
+      _feedback('"$name" is not a UTF-8 text file', error: true);
+      return;
+    }
+    loadMapperText(text, label: '"$name"');
+  }
+
+  void loadMapperSample(MapperSample sample) => loadMapperText(sample.json);
+
+  void clearMapper() {
+    if (state.mapper == null) return;
+    emit(state.copyWith(clearMapper: true, mapperErrors: const []));
+    _feedback('Component mapper removed');
+  }
+
+  void downloadMapper(ComponentMapper mapper) {
+    final ok = downloadTextFile('component_mapper.json', mapper.source);
+    _feedback(
+      ok
+          ? 'Downloaded component_mapper.json'
+          : 'The download was blocked by the browser',
+      error: !ok,
+    );
+  }
+
+  /// Copies the AI prompt that generates a mapper from a component library.
+  Future<void> copyMapperPrompt() async {
+    try {
+      await Clipboard.setData(ClipboardData(text: buildMapperPrompt()));
+      _feedback(
+        'Prompt copied. Paste it into your AI assistant together with your component library.',
+      );
+    } catch (_) {
+      _feedback(
+        'Could not access the clipboard. Open "AI prompt" and copy it manually.',
+        error: true,
+      );
+    }
+  }
+
+  void downloadMapperTemplate() {
+    final ok = downloadTextFile(
+      'component_mapper_template.json',
+      mapperTemplate,
+    );
+    _feedback(
+      ok
+          ? 'Downloaded component_mapper_template.json'
+          : 'The download was blocked by the browser',
+      error: !ok,
+    );
+  }
+
   // ------------------------------------------------------- conversion
 
   Future<void> convertToFlutter() async {
@@ -132,13 +216,15 @@ class ConverterCubit extends Cubit<ConverterState> {
     await Future<void>.delayed(const Duration(milliseconds: 30));
     final source = state.html;
     try {
-      final result = _converter.convert(source);
+      final mapper = state.mapper;
+      final result = _converter.convert(source, mapper: mapper);
       final code = _generator.generate(result);
       emit(
         state.copyWith(
           status: ConversionStatus.success,
           result: result,
           convertedSource: source,
+          convertedMapper: mapper,
           dartSource: code.source,
           generatedLines: code.lineCount,
           previewHtml: source,

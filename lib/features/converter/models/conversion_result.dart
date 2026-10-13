@@ -1,3 +1,4 @@
+import 'component_mapper.dart';
 import 'ui_node.dart';
 
 enum WarningLevel { info, warning }
@@ -27,6 +28,8 @@ class ConversionResult {
     required this.warnings,
     required this.elementsProcessed,
     required this.unsupportedFeatures,
+    this.mapper,
+    this.mappedWidgets = const {},
   });
 
   /// Root column representing `<body>`.
@@ -41,6 +44,14 @@ class ConversionResult {
 
   /// Distinct feature names that could not be represented faithfully.
   final List<String> unsupportedFeatures;
+
+  /// Component mapper used for this conversion, if any.
+  final ComponentMapper? mapper;
+
+  /// How many elements were mapped to each custom widget.
+  final Map<String, int> mappedWidgets;
+
+  int get mappedCount => mappedWidgets.values.fold(0, (a, b) => a + b);
 
   int get warningCount =>
       warnings.where((w) => w.level == WarningLevel.warning).length;

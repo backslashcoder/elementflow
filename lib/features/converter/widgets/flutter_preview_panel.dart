@@ -110,8 +110,11 @@ class _FlutterPreviewPanelState extends State<FlutterPreviewPanel> {
           Expanded(
             child: Text(
               issues.isEmpty
-                  ? 'Real Flutter widgets · '
-                        '${state.previewSize.width.round()} px'
+                  ? ((state.result?.mappedCount ?? 0) > 0
+                        ? 'Standard widgets shown for ${state.result!.mappedCount} '
+                              'mapped elements · your widgets are in the Dart code'
+                        : 'Real Flutter widgets · '
+                              '${state.previewSize.width.round()} px')
                   : 'Preview issue: ${issues.first}'
                         '${issues.length > 1 ? '  (+${issues.length - 1} more)' : ''}',
               maxLines: 2,

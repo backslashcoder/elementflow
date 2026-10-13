@@ -1,3 +1,4 @@
+import 'component_mapper.dart';
 import 'ui_style.dart';
 
 enum UiKind {
@@ -20,6 +21,20 @@ enum UiMain { start, end, center, spaceBetween, spaceAround, spaceEvenly }
 enum UiCross { start, end, center, stretch }
 
 enum UiFit { fill, contain, cover, fitWidth, fitHeight, none, scaleDown }
+
+/// A component-mapper rule attached to a node: the generated code uses the
+/// user's widget instead of the standard Flutter widget. The live preview
+/// keeps rendering the standard equivalent (custom widgets are not available
+/// inside ElementFlow).
+class UiCustom {
+  const UiCustom(this.def, this.values);
+
+  final ComponentDef def;
+
+  /// Dart expression for every scalar template variable, e.g. `text` ->
+  /// `'Save'`, `checked` -> `true`, `style.color` -> `Color(0xFF000000)`.
+  final Map<String, String> values;
+}
 
 /// A run of inline content: either styled text or an embedded node.
 class UiSpan {
@@ -55,6 +70,9 @@ class UiNode {
 
   UiBox box;
   List<UiNode> children;
+
+  /// Set when a component mapper rule matched this element.
+  UiCustom? custom;
 
   // ---- Flex / column / row / wrap container behaviour -------------------
   UiMain mainAxis = UiMain.start;

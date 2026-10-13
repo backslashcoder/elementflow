@@ -1,6 +1,8 @@
+import '../models/component_mapper.dart';
 import '../models/conversion_result.dart';
 import '../models/ui_node.dart';
 import '../models/ui_style.dart';
+import 'dart_literals.dart';
 import 'generated_helpers.dart';
 import 'ui_helpers.dart';
 
@@ -53,6 +55,19 @@ class _Call extends _E {
     final pad = ' ' * (indent + 2);
     return '$prefix$name(\n${parts.map((p) => '$pad$p,').join('\n')}\n${' ' * indent})';
   }
+}
+
+/// Template text with embedded expressions (component mapper arguments).
+class _Tpl extends _E {
+  _Tpl(this.parts);
+  final List<Object> parts;
+
+  @override
+  bool get isConst => false;
+
+  @override
+  String render(int indent, bool inConst) =>
+      parts.map((p) => p is _E ? p.render(indent, false) : p as String).join();
 }
 
 /// `(params) => body`
@@ -113,10 +128,29 @@ class DartCodeGenerator {
     _ctx = _Context();
     final rootExpr = _widget(result.root, depth: 0);
 
+    // Section widgets are generated up front so that everything the file
+    // needs (custom imports, theme) is known before the header is written.
+    final sectionExprs = <_E>[];
+    for (var i = 0; i < _ctx.sections.length; i++) {
+      sectionExprs.add(_placed(_ctx.sections[i].node, _ctx.sections[i].depth));
+    }
+
+    final mapper = _ctx.usedCustom ? result.mapper : null;
+    final imports =
+        <String>{'package:flutter/material.dart', ...?mapper?.imports}.toList()
+          ..sort((a, b) {
+            final da = a.startsWith('dart:') ? 0 : 1;
+            final db = b.startsWith('dart:') ? 0 : 1;
+            return da != db ? da - db : a.compareTo(b);
+          });
+
     final b = StringBuffer()
       ..writeln('// ignore_for_file: unused_element_parameter')
-      ..writeln()
-      ..writeln("import 'package:flutter/material.dart';")
+      ..writeln();
+    for (final i in imports) {
+      b.writeln("import '$i';");
+    }
+    b
       ..writeln()
       ..writeln('void main() {')
       ..writeln('  runApp(const GeneratedApp());')
@@ -132,10 +166,14 @@ class DartCodeGenerator {
       ..writeln(
         "      title: ${_str(result.title.isEmpty ? 'ElementFlow Page' : result.title)},",
       )
-      ..writeln('      theme: ThemeData(')
-      ..writeln('        useMaterial3: true,')
-      ..writeln('        colorSchemeSeed: const Color($_accent),')
-      ..writeln('      ),')
+      ..writeln(
+        mapper?.theme != null
+            ? '      theme: ${mapper!.theme},'
+            : '      theme: ThemeData(\n'
+                  '        useMaterial3: true,\n'
+                  '        colorSchemeSeed: const Color($_accent),\n'
+                  '      ),',
+      )
       ..writeln('      home: const GeneratedPage(),')
       ..writeln('    );')
       ..writeln('  }')
@@ -173,7 +211,7 @@ class DartCodeGenerator {
     // Extracted section widgets (may enqueue more while generating).
     for (var i = 0; i < _ctx.sections.length; i++) {
       final s = _ctx.sections[i];
-      final expr = _placed(s.node, s.depth);
+      final expr = sectionExprs[i];
       b
         ..writeln()
         ..writeln('class ${s.name} extends StatelessWidget {')
@@ -224,6 +262,14 @@ class DartCodeGenerator {
       }
     }
 
+    if (mapper != null) {
+      for (final d in mapper.declarations) {
+        b
+          ..writeln()
+          ..writeln(d);
+      }
+    }
+
     final source = b.toString();
     return GeneratedCode(
       source,
@@ -236,46 +282,9 @@ class DartCodeGenerator {
 
   // --------------------------------------------------------- primitives
 
-  static String _n(num v) {
-    if (v == double.infinity) return 'double.infinity';
-    final d = v.toDouble();
-    if (d == d.roundToDouble()) return d.toInt().toString();
-    var s = d.toStringAsFixed(3);
-    s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-    return s;
-  }
+  static String _n(num v) => dartNum(v);
 
-  static String _str(String s) {
-    final b = StringBuffer("'");
-    for (final r in s.runes) {
-      switch (r) {
-        case 0x5C:
-          b.write(r'\\');
-        case 0x27:
-          b.write(r"\'");
-        case 0x24:
-          b.write(r'\$');
-        case 0x0A:
-          b.write(r'\n');
-        case 0x0D:
-          b.write(r'\r');
-        case 0x09:
-          b.write(r'\t');
-        default:
-          if (r < 0x20 ||
-              r == 0x7F ||
-              (r >= 0x80 && r < 0xA0) ||
-              r == 0x2028 ||
-              r == 0x2029) {
-            b.write('\\u{${r.toRadixString(16).toUpperCase()}}');
-          } else {
-            b.writeCharCode(r);
-          }
-      }
-    }
-    b.write("'");
-    return b.toString();
-  }
+  static String _str(String s) => dartString(s);
 
   static _E _color(int argb) => _Call('Color', [
     _p(_lit('0x${argb.toRadixString(16).toUpperCase().padLeft(8, '0')}')),
@@ -525,8 +534,8 @@ class DartCodeGenerator {
   }
 
   _E _boxed(UiNode n, int depth) {
-    final plan = planBox(n);
-    final b = n.box;
+    final plan = planBox(n, forCode: true);
+    final b = effectiveBox(n, forCode: true);
     final content = _content(n, depth);
 
     if (plan.categories == 0) return content ?? _Call('SizedBox.shrink', []);
@@ -586,6 +595,43 @@ class DartCodeGenerator {
   }
 
   _E? _content(UiNode n, int depth) {
+    if (n.custom != null) return _customWidget(n, depth);
+    return _standardContent(n, depth);
+  }
+
+  /// The widget a component-mapper rule produces for [n].
+  _E _customWidget(UiNode n, int depth) {
+    final c = n.custom!;
+    _ctx.usedCustom = true;
+    _E tpl(String template) {
+      final parts = <Object>[];
+      var last = 0;
+      for (final m in templateVariable.allMatches(template)) {
+        if (m.start > last) parts.add(template.substring(last, m.start));
+        final v = m.group(1)!;
+        if (v == 'child') {
+          parts.add(_standardContent(n, depth) ?? _Call('SizedBox.shrink', []));
+        } else if (v == 'children') {
+          final items = n.children.isNotEmpty
+              ? _children(n, depth)
+              : [?_standardContent(n, depth)];
+          parts.add(_ListE(items));
+        } else {
+          parts.add(c.values[v] ?? 'null');
+        }
+        last = m.end;
+      }
+      if (last < template.length) parts.add(template.substring(last));
+      return _Tpl(parts);
+    }
+
+    return _Call(c.def.widget, [
+      for (final p in c.def.positional) _p(tpl(p)),
+      for (final e in c.def.args.entries) _a(e.key, tpl(e.value)),
+    ], constCapable: false);
+  }
+
+  _E? _standardContent(UiNode n, int depth) {
     switch (n.kind) {
       case UiKind.column:
         return _column(n, depth);
@@ -870,6 +916,7 @@ class _Context {
   final _byNode = <UiNode, String>{};
   final _used = <String>{};
   bool usesPlaceholder = false;
+  bool usedCustom = false;
   bool usesCheckbox = false, usesRadio = false;
   bool usesSlider = false, usesSelect = false;
 

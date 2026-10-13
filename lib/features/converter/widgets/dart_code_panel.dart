@@ -281,6 +281,12 @@ class _ReportView extends StatelessWidget {
               color: state.dartSource != null ? EF.success : EF.error,
             ),
             _Stat(label: 'Lines of Dart', value: '${state.generatedLines}'),
+            if (r.mapper != null)
+              _Stat(
+                label: 'Mapped to your widgets',
+                value: '${r.mappedCount}',
+                color: r.mappedCount > 0 ? EF.accent : EF.warning,
+              ),
           ],
         ),
         const SizedBox(height: 10),
@@ -289,6 +295,18 @@ class _ReportView extends StatelessWidget {
           'project (Flutter 3.27 or newer) to verify.',
           style: TextStyle(fontSize: 12, color: EF.faint),
         ),
+        if (r.mapper != null && r.mappedWidgets.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          _SectionTitle('Component mapper: ${r.mapper!.name}'),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final e in r.mappedWidgets.entries)
+                Pill(label: '${e.key} × ${e.value}', color: EF.accent),
+            ],
+          ),
+        ],
         if (unsupported.isNotEmpty) ...[
           const SizedBox(height: 18),
           const _SectionTitle('Unsupported or approximated features'),

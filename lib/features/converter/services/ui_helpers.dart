@@ -1,3 +1,4 @@
+import '../models/component_mapper.dart';
 import '../models/ui_node.dart';
 import '../models/ui_style.dart';
 
@@ -107,9 +108,36 @@ class BoxPlan {
       (decoration ? 1 : 0);
 }
 
-BoxPlan planBox(UiNode n) {
+/// The box wrapped around a node in the generated code. A node converted by a
+/// component mapper keeps only the parts of its CSS box that the rule asks
+/// for; the custom widget is expected to draw the rest itself.
+UiBox effectiveBox(UiNode n, {bool forCode = false}) {
+  final c = n.custom;
+  if (!forCode || c == null) return n.box;
   final b = n.box;
-  final sizeInside = n.kind == UiKind.image;
+  switch (c.def.box) {
+    case MapperBox.none:
+      return UiBox.empty;
+    case MapperBox.margin:
+      return UiBox(margin: b.margin);
+    case MapperBox.size:
+      return UiBox(
+        margin: b.margin,
+        width: b.width,
+        height: b.height,
+        minWidth: b.minWidth,
+        maxWidth: b.maxWidth,
+        minHeight: b.minHeight,
+        maxHeight: b.maxHeight,
+      );
+    case MapperBox.all:
+      return b;
+  }
+}
+
+BoxPlan planBox(UiNode n, {bool forCode = false}) {
+  final b = effectiveBox(n, forCode: forCode);
+  final sizeInside = n.kind == UiKind.image && !(forCode && n.custom != null);
   final deco = b.hasDecoration;
   final onlyColor =
       deco &&

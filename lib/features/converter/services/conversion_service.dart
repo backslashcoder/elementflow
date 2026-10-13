@@ -2,10 +2,12 @@ import 'dart:math' as math;
 
 import 'package:html/dom.dart' as dom;
 
+import '../models/component_mapper.dart';
 import '../models/conversion_result.dart';
 import '../models/ui_node.dart';
 import '../models/ui_style.dart';
 import 'css_parser_service.dart';
+import 'dart_literals.dart';
 import 'css_values.dart';
 import 'html_parser_service.dart';
 import 'style_mapper.dart';
@@ -24,7 +26,7 @@ class ConversionService {
   final HtmlParserService _html;
   final CssParserService _css;
 
-  ConversionResult convert(String source) {
+  ConversionResult convert(String source, {ComponentMapper? mapper}) {
     final parsed = _html.parse(source);
     final warnings = WarningCollector();
 
@@ -87,7 +89,7 @@ class ConversionService {
     }
 
     final resolver = StyleResolver(rules, _css, warnings);
-    final converter = _Converter(warnings, resolver);
+    final converter = _Converter(warnings, resolver, mapper);
     return converter.run(parsed);
   }
 }
@@ -201,11 +203,14 @@ class _Track {
 }
 
 class _Converter {
-  _Converter(this.warnings, this.resolver) : mapper = StyleMapper(warnings);
+  _Converter(this.warnings, this.resolver, this.componentMapper)
+    : mapper = StyleMapper(warnings);
 
   final WarningCollector warnings;
   final StyleResolver resolver;
   final StyleMapper mapper;
+  final ComponentMapper? componentMapper;
+  final _mapped = <String, int>{};
 
   final _styles = <dom.Element, ComputedStyle>{};
   var _controlId = 0;
@@ -232,7 +237,29 @@ class _Converter {
       root.box = root.box.copyWith(minHeight: const UiLen(100, UiUnit.vh));
     }
 
+    final cm = componentMapper;
+    if (cm != null) {
+      final count = _mapped.values.fold(0, (a, b) => a + b);
+      if (count == 0) {
+        warnings.add(
+          'mapper:none',
+          'The component mapper "${cm.name}" matched no elements in this HTML, '
+              'so standard Flutter widgets were generated',
+        );
+      } else {
+        warnings.add(
+          'mapper:used',
+          '$count element(s) were converted with your component mapper '
+              '"${cm.name}". The Flutter preview shows standard widgets in their '
+              'place; the generated Dart code uses your widgets.',
+          level: WarningLevel.info,
+        );
+      }
+    }
+
     return ConversionResult(
+      mapper: cm,
+      mappedWidgets: Map.unmodifiable(_mapped),
       root: root,
       pageBackground: pageBg,
       title: parsed.title,
@@ -368,6 +395,13 @@ class _Converter {
   /// Converts [el] as a block-level box. Returns null for elements that
   /// produce no output (and reports unsupported ones).
   UiNode? _blockNode(dom.Element el, ComputedStyle s) {
+    final node = _convertBlock(el, s);
+    final def = componentMapper?.match(el);
+    if (node != null && def != null) _applyCustom(node, el, s, def);
+    return node;
+  }
+
+  UiNode? _convertBlock(dom.Element el, ComputedStyle s) {
     final tag = el.localName!;
     final pos = s['position']?.toLowerCase();
     if (pos == 'absolute' || pos == 'fixed' || pos == 'sticky') {
@@ -534,6 +568,7 @@ class _Converter {
 
   bool _isAtomicInline(dom.Element el, ComputedStyle s) {
     final tag = el.localName;
+    if (componentMapper?.match(el) != null) return true;
     if (_atomicTags.contains(tag) || _unsupportedReplaced.contains(tag)) {
       return true;
     }
@@ -743,6 +778,133 @@ class _Converter {
       last.box = last.box.copyWith(margin: last.box.margin.copyWith(bottom: 0));
     }
     if (margin != b.margin) col.box = b.copyWith(margin: margin);
+  }
+
+  // ------------------------------------------------------ component mapper
+
+  static const _attrShortcuts = {
+    'id',
+    'class',
+    'href',
+    'src',
+    'alt',
+    'placeholder',
+    'value',
+    'name',
+    'type',
+    'title',
+  };
+  static const _boolShortcuts = {
+    'checked',
+    'disabled',
+    'required',
+    'readonly',
+    'selected',
+    'multiple',
+  };
+
+  void _applyCustom(
+    UiNode n,
+    dom.Element el,
+    ComputedStyle s,
+    ComponentDef def,
+  ) {
+    final values = <String, String>{};
+    for (final v in def.variables) {
+      if (isContentVariable(v)) continue;
+      values[v] = _mapperValue(v, el, s, n);
+    }
+    n.custom = UiCustom(def, values);
+    _mapped.update(def.widget, (c) => c + 1, ifAbsent: () => 1);
+  }
+
+  String _mapperValue(String v, dom.Element el, ComputedStyle s, UiNode n) {
+    String attr(String name) {
+      final a = el.attributes[name];
+      return a == null ? 'null' : dartString(a);
+    }
+
+    String flag(String name) =>
+        el.attributes.containsKey(name) ? 'true' : 'false';
+
+    if (_attrShortcuts.contains(v)) {
+      if (v == 'value' &&
+          el.localName == 'textarea' &&
+          el.attributes['value'] == null) {
+        return dartString(el.text.trim());
+      }
+      return attr(v);
+    }
+    if (_boolShortcuts.contains(v)) return flag(v);
+    if (v.startsWith('attr.')) return attr(v.substring(5));
+    if (v.startsWith('bool.')) return flag(v.substring(5));
+
+    switch (v) {
+      case 'text':
+        final t = el.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        return dartString(mapper.transformText(t, s));
+      case 'options':
+        final opts = n.kind == UiKind.select
+            ? n.options
+            : [
+                for (final o in el.querySelectorAll('option'))
+                  o.text.replaceAll(RegExp(r'\s+'), ' ').trim(),
+              ];
+        return '[${opts.map(dartString).join(', ')}]';
+      case 'selectedIndex':
+        return '${n.selectedIndex}';
+      case 'selectedOption':
+        return n.kind == UiKind.select ? dartString(n.value ?? '') : 'null';
+    }
+
+    // style.* values come from the converted node, so controls (whose visuals
+    // live in `control`) and plain boxes report the same properties.
+    final control =
+        n.kind == UiKind.button ||
+        n.kind == UiKind.textField ||
+        n.kind == UiKind.select;
+    switch (v) {
+      case 'style.color':
+        return dartColor(s.color);
+      case 'style.backgroundColor':
+        final bg = control ? n.control.fill : n.box.background;
+        return bg == null ? 'null' : dartColor(bg);
+      case 'style.fontSize':
+        return dartNum(s.fontSize);
+      case 'style.fontWeight':
+        return 'FontWeight.w${int.tryParse(s['font-weight'] ?? '') ?? 400}';
+      case 'style.padding':
+        return dartInsets(control ? n.control.padding : n.box.padding);
+      case 'style.borderRadius':
+        final r = n.box.radius;
+        final cr = control
+            ? n.control.radius
+            : (r == null
+                  ? 0.0
+                  : [
+                      r.topLeft,
+                      r.topRight,
+                      r.bottomLeft,
+                      r.bottomRight,
+                    ].reduce(math.max));
+        return dartNum(cr);
+      case 'style.width':
+        final w = n.box.width;
+        return w != null && w.isPx ? dartNum(w.value) : 'null';
+      case 'style.height':
+        final h = n.box.height;
+        return h != null && h.isPx ? dartNum(h.value) : 'null';
+      case 'style.textAlign':
+        final a = mapper.textAlign(s);
+        return a == UiTextAlign.start ? 'null' : 'TextAlign.${a.name}';
+      case 'style.gap':
+        return dartNum(n.gap);
+    }
+    warnings.add(
+      'mapper:var:$v',
+      'Unknown mapper variable {{$v}} was replaced with null',
+    );
+    return 'null';
   }
 
   // ---------------------------------------------------------------- flex

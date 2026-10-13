@@ -1,3 +1,4 @@
+import '../models/component_mapper.dart';
 import '../models/conversion_result.dart';
 
 enum ConversionStatus { idle, converting, success, failure }
@@ -49,6 +50,9 @@ class ConverterState {
     this.visiblePanes = defaultPanes,
     this.previewIssues = const [],
     this.feedback,
+    this.mapper,
+    this.convertedMapper,
+    this.mapperErrors = const [],
   });
 
   /// Current contents of the editor.
@@ -92,11 +96,22 @@ class ConverterState {
   final List<String> previewIssues;
   final ActionFeedback? feedback;
 
+  /// Active component mapper (custom widget library), if any.
+  final ComponentMapper? mapper;
+
+  /// Mapper used by the last successful conversion.
+  final ComponentMapper? convertedMapper;
+
+  /// Problems found in the last mapper that failed to load.
+  final List<String> mapperErrors;
+
   bool get hasInput => html.trim().isNotEmpty;
   bool get isConverting => status == ConversionStatus.converting;
 
   /// The editor changed after the last conversion.
-  bool get isOutdated => result != null && convertedSource != html;
+  bool get isOutdated =>
+      result != null &&
+      (convertedSource != html || convertedMapper?.source != mapper?.source);
 
   List<ConversionWarning> get warnings => result?.warnings ?? const [];
 
@@ -119,6 +134,10 @@ class ConverterState {
     Set<WorkspacePane>? visiblePanes,
     List<String>? previewIssues,
     ActionFeedback? feedback,
+    ComponentMapper? mapper,
+    bool clearMapper = false,
+    ComponentMapper? convertedMapper,
+    List<String>? mapperErrors,
   }) {
     return ConverterState(
       html: html ?? this.html,
@@ -138,6 +157,11 @@ class ConverterState {
       visiblePanes: visiblePanes ?? this.visiblePanes,
       previewIssues: previewIssues ?? this.previewIssues,
       feedback: feedback ?? this.feedback,
+      mapper: clearMapper ? null : (mapper ?? this.mapper),
+      convertedMapper: clearResult
+          ? null
+          : (convertedMapper ?? this.convertedMapper),
+      mapperErrors: mapperErrors ?? this.mapperErrors,
     );
   }
 }

@@ -5,6 +5,7 @@ import '../../../theme/app_theme.dart';
 import '../cubit/converter_cubit.dart';
 import '../cubit/converter_state.dart';
 import '../services/samples.dart';
+import 'mapper_menu.dart';
 import 'panel_frame.dart';
 
 (String, Color, IconData) _statusOf(ConverterState s) {
@@ -77,6 +78,8 @@ class AppHeader extends StatelessWidget {
                   if (!compact) Pill(label: label, color: color, icon: icon),
                   if (!compact) const SizedBox(width: 14),
                   SamplesMenu(compact: compact),
+                  const SizedBox(width: 8),
+                  MapperMenu(compact: compact),
                   const SizedBox(width: 8),
                   GhostButton(
                     label: 'Clear',
